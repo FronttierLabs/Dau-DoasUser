@@ -141,10 +141,7 @@ static struct pam_conv make_conv(void) {
     return c;
 }
 */
-
-
-// i have barely any idea of what the shit below does i used claude and qwen 3.8 to make pam.go - yep
-mport "C"
+import "C"
 
 import (
 	"fmt"
