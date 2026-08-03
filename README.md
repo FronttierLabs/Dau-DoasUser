@@ -20,7 +20,7 @@ Current release: `v1.1.0-shrike`
 There is intentionally no installer script — the steps below ARE the installer.
 Run everything as root (`sudo -i` first, or prefix each command with `sudo`).
 
-### Debian / Ubuntu (tested on Debian 13 live)
+### Debian / Ubuntu (tested on Debian 13)
 
 ```bash
 apt-get update
@@ -36,7 +36,7 @@ printf '#%%PAM-1.0\nauth      include     common-auth\naccount   include     com
 chmod 0644 /etc/pam.d/dau
 ```
 
-### Arch / CachyOS
+### Arch 
 
 ```bash
 pacman -Sy --noconfirm base-devel go git
@@ -74,7 +74,7 @@ permit bob as root cmd /usr/bin/journalctl args -*
 permit carol as root cmd /usr/bin/less args any         # explicit opt-in
 ```
 
-## Security model (read this)
+## Security model (MUST READ!!!)
 
 - **Trusted-binary invariant:** every executed binary must be root-owned, not
   group/other-writable, and live in a root-owned, non-writable directory.
