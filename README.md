@@ -59,11 +59,11 @@ chmod 0644 /etc/pam.d/dau
 - On live ISOs: set a password for the invoking user first (`passwd`); PAM needs one.
 - Verify: `dau -version` and `dau id`.
 
-### Symlinked binaries are refused (by design)
+### Symlinked binaries (e.g., reboot, vi)
 
-`dau` opens the target with `O_NOFOLLOW`, so commands that are symlinks
-(e.g. `reboot` → `systemctl` on Debian) fail with "too many levels of symbolic links".
-Invoke the real binary instead: `dau systemctl reboot`, or pin the absolute real path in your policy.
+`dau` resolves symlinks to their real targets (e.g., `/sbin/reboot` → `/bin/systemctl`)
+before opening the file descriptor. Security is maintained by strictly verifying that the
+directory containing the *final* resolved binary is also root-owned and non-writable.
 
 ## Policy (`/etc/dau.conf`)
 

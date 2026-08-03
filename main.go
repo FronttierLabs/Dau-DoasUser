@@ -369,21 +369,31 @@ func main() {
 		fatal("cannot resolve %q via safe PATH", cli.Command)
 	}
 
-	// TOCTOU fix: open and verify the binary IMMEDIATELY after resolution - not temp fix?
-	// the same fd is carried all the way to execveat - kinda needed
-	fd, err := unix.Open(resolvedCmd, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	// Resolve symlinks (e.g., /sbin/reboot -> /bin/systemctl) so O_NOFOLLOW
+	// doesn't reject standard system symlinks. Security is maintained because
+	// we verify the directory of the FINAL resolved target is also trusted.
+	realCmd, err := filepath.EvalSymlinks(resolvedCmd)
 	if err != nil {
-		fatal("open %s: %v", resolvedCmd, err)
+		fatal("cannot resolve symlinks for %q: %v", resolvedCmd, err)
 	}
-	vlogf("exec fd=%d opened (O_NOFOLLOW|O_CLOEXEC)", fd)
+	if !dirTrustworthy(filepath.Dir(realCmd)) {
+		fatal("resolved target %q lives in untrusted directory", realCmd)
+	}
 
-	if err := verifyTrustedBinary(fd, resolvedCmd); err != nil {
+	// TOCTOU fix: open and verify the REAL binary IMMEDIATELY after resolution.
+	fd, err := unix.Open(realCmd, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		fatal("open %s: %v", realCmd, err)
+	}
+	vlogf("exec fd=%d opened (O_NOFOLLOW|O_CLOEXEC) for %s -> %s", fd, resolvedCmd, realCmd)
+
+	if err := verifyTrustedBinary(fd, realCmd); err != nil {
 		_ = unix.Close(fd)
-		fatal("refusing to exec untrusted binary %s: %v", resolvedCmd, err)
+		fatal("refusing to exec untrusted binary %s: %v", realCmd, err)
 	}
 
-	auditLog("PARSE", fmt.Sprintf("invoker_uid=%d target=%s cmd=%s resolved=%s args=%v",
-		ruid, cli.TargetUser, cli.Command, resolvedCmd, cmdArgs))
+	auditLog("PARSE", fmt.Sprintf("invoker_uid=%d target=%s cmd=%s resolved=%s real=%s args=%v",
+		ruid, cli.TargetUser, cli.Command, resolvedCmd, realCmd, cmdArgs))
 
 	cfg := loadConfig()
 	vlogf("policy loaded: %d rule(s)", len(cfg.Rules))
@@ -437,7 +447,7 @@ func main() {
 	}
 
 	auditLog("EXEC", fmt.Sprintf("uid=%d → target_uid=%d cmd=%s args=%v binary=%s",
-		ruid, targetUID, resolvedCmd, cmdArgs, resolvedCmd))
+		ruid, targetUID, resolvedCmd, cmdArgs, realCmd))
 
 	argv := make([]string, len(cli.Args))
 	copy(argv, cli.Args)
