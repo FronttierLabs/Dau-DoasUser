@@ -3,7 +3,7 @@
 A minimal, PAM-backed privilege-escalation utility for Linux, written in Go + CGO.
 Think of it as a tiny, auditable `sudo`/`doas` alternative.
 
-Current release: `v1.1.0-shrike`
+Current release: `v1.2.0-kestrel`
 
 ## Features
 - PAM authentication against the `dau` service (fail-closed, no silent fallback)

@@ -16,7 +16,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const Version = "v1.1.0-shrike"
+const Version = "v1.2.0-kestrel"
 
 var sysLog *syslog.Writer
 
