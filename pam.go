@@ -255,26 +255,19 @@ func authenticateUser(invoker string) error {
 	fi, err := os.Lstat(pamPath)
 	if err != nil {
 		auditLog("AUTH_FAIL", fmt.Sprintf("no PAM service found (invoker=%s)", invoker))
-		return fmt.Errorf("no usable PAM service %s present (fail-closed)", service)
+		return fmt.Errorf("no usable PAM service %q present (fail-closed)", service)
 	}
-	if fi.Mode()&os.ModeSymlink != 0 { return fmt.Errorf("PAM service %q must not be a symlink", pamPath) }
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("PAM service %q must not be a symlink (fail-closed)", pamPath)
+	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return fmt.Errorf("cannot stat PAM service")
-	}
-	if st.Uid != 0 || st.Gid != 0 {
-		return fmt.Errorf("PAM service %s must be root-owned", pamPath)
-	}
-	if fi.Mode().Perm()&0022 != 0 {
-		return fmt.Errorf("PAM service %s must not be group/other-writable", pamPath)
+	if !ok || st.Uid != 0 || fi.Mode().Perm()&0022 != 0 {
+		return fmt.Errorf("PAM service %q must be root-owned and non-writable", pamPath)
 	}
 
 	auditLog("AUTH", fmt.Sprintf("service=%s invoker=%s", service, invoker))
-
 	ph, err := pamStart(service, invoker)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	defer ph.end()
 
 	ph.setPamContext()
@@ -284,10 +277,6 @@ func authenticateUser(invoker string) error {
 	}
 	if err := ph.acctMgmt(); err != nil {
 		auditLog("ACCT_FAIL", fmt.Sprintf("invoker=%s: %v", invoker, err))
-		return err
-	}
-	if err := ph.setCred(); err != nil {
-		auditLog("CRED_FAIL", fmt.Sprintf("invoker=%s: %v", invoker, err))
 		return err
 	}
 	return nil

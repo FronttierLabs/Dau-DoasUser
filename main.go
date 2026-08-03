@@ -40,6 +40,8 @@ func auditLog(tag, msg string) {
 
 
 //prints for verbose statement - can be removed i just like seeing what my shit does while its being executed
+//prints for verbose statement - can be removed i just like seeing what my shit does while its being executed
+//prints for verbose statement - can be removed i just like seeing what my shit does while its being executed
 var verbose bool
 
 func vlogf(format string, a ...any) {
@@ -76,6 +78,8 @@ func getSupplementaryGIDs() []uint32 {
 }
 
 
+//elavates the user privileges to root then drops down - needed
+//elavates the user privileges to root then drops down - needed
 //elavates the user privileges to root then drops down - needed
 func dropToUser(uid, gid uint32) error {
 	if err := unix.Setgroups([]int{int(gid)}); err != nil {
@@ -114,6 +118,8 @@ func setTargetCredentials(uid, gid uint32) error {
 }
 
 
+//path needed for dau if removed dau wont execute - needed
+//path needed for dau if removed dau wont execute - needed
 //path needed for dau if removed dau wont execute - needed
 const safePATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -383,8 +389,6 @@ func main() {
 
 // TOCTOU fix: open and verify the binary IMMEDIATELY after resolution - not temp fix?
 // the same fd is carried all the way to execveat - kinda needed
-	// TOCTOU fix: open and verify the binary IMMEDIATELY after resolution - not temp fix?
-	// the same fd is carried all the way to execveat - kinda needed
 	fd, err := unix.Open(resolvedCmd, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		fatal("open %s: %v", resolvedCmd, err)
@@ -408,6 +412,8 @@ func main() {
 	}
 
 //cheks user prev
+	//cheks user prev
+	//cheks user prev
 	rule := cfg.findRule(ruid, invokerGIDs, cli.TargetUser, resolvedCmd, cmdArgs)
 	if rule == nil {
 		auditLog("DENY", fmt.Sprintf("uid=%d target=%s cmd=%s args=%v – no matching rule",
@@ -443,8 +449,6 @@ func main() {
 
 // delegate group resolution to POSIX initgroups(3) It is heavily audited
 // handles NSS edge cases natively and prevents Go level parsing bugs - needed 'might be temp'
-	// delegate group resolution to POSIX initgroups(3) It is heavily audited
-	// handles NSS edge cases natively and prevents Go level parsing bugs - needed 'might be temp'
 	if err := initGroups(cli.TargetUser, uint32(targetGID)); err != nil {
 		fatal("initgroups(%q): %v", cli.TargetUser, err)
 	}
