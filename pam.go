@@ -263,11 +263,12 @@ func (p *pamHandle) end() { C.pam_end(p.h, C.PAM_SUCCESS) }
 func authenticateUser(invoker string) error {
 	service := "dau"
 	pamPath := "/etc/pam.d/" + service
-	fi, err := os.Stat(pamPath)
+	fi, err := os.Lstat(pamPath)
 	if err != nil {
 		auditLog("AUTH_FAIL", fmt.Sprintf("no PAM service found (invoker=%s)", invoker))
 		return fmt.Errorf("no usable PAM service %s present (fail-closed)", service)
 	}
+	if fi.Mode()&os.ModeSymlink != 0 { return fmt.Errorf("PAM service %q must not be a symlink", pamPath) }
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return fmt.Errorf("cannot stat PAM service")
