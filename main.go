@@ -121,7 +121,7 @@ var envTokenRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.@-]*$`)
 // Strict charset for the attacker-controlled -u value, validated before the
 // root-privileged NSS lookup. Rejects anything that could confuse NSS or
 // carry metacharacters.
-var usernameRe = regexp.MustCompile(`^[A-Za-z0-9._][A-Za-z0-9._-]{0,31}$`)
+var usernameRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
 var allowedLocales = map[string]struct{}{
 	"C": {}, "POSIX": {}, "C.UTF-8": {}, "en_US.UTF-8": {}, "en_GB.UTF-8": {},
@@ -247,27 +247,6 @@ func verifyTrustedBinary(fd int, path string) error {
 	}
 	vlogf("verifyTrustedBinary: %s ok (root-owned, non-writable, trusted dir)", path)
 	return nil
-}
-
-// closeHighFDs closes every descriptor > 2 except `except` (the exec fd), so
-// nothing we opened leaks into the child. Called AFTER the final trust check
-// so a verifyTrustedBinary refusal above can still reach syslog.
-func closeHighFDs(except int) {
-	f, err := os.Open("/proc/self/fd")
-	if err != nil {
-		return
-	}
-	names, _ := f.Readdirnames(-1)
-	_ = f.Close()
-	closed := 0
-	for _, n := range names {
-		fd, err := strconv.Atoi(n)
-		if err == nil && fd > 2 && fd != except {
-			_ = unix.Close(fd)
-			closed++
-		}
-	}
-	vlogf("fd: closed %d descriptors >2 via /proc (kept fd %d)", closed, except)
 }
 
 // getUserShell reads /etc/passwd because Go's os/user.User has no Shell
@@ -423,6 +402,17 @@ func main() {
 		fatal("cannot resolve %q via safe PATH", cli.Command)
 	}
 
+	fd, err := unix.Open(resolvedCmd, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		fatal("open %s: %v", resolvedCmd, err)
+	}
+	vlogf("exec fd=%d opened (O_NOFOLLOW|O_CLOEXEC)", fd)
+
+	if err := verifyTrustedBinary(fd, resolvedCmd); err != nil {
+		_ = unix.Close(fd)
+		fatal("refusing to exec untrusted binary %s: %v", resolvedCmd, err)
+	}
+
 	auditLog("PARSE", fmt.Sprintf("invoker_uid=%d target=%s cmd=%s resolved=%s args=%v",
 		ruid, cli.TargetUser, cli.Command, resolvedCmd, cmdArgs))
 
@@ -486,20 +476,7 @@ func main() {
 	argv[0] = cli.Command // preserve the user-invoked name as argv[0]
 	vlogf("execveat argv=%v", argv)
 
-	fd, err := unix.Open(resolvedCmd, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		fatal("open %s: %v", resolvedCmd, err)
-	}
-	vlogf("exec fd=%d opened (O_NOFOLLOW|O_CLOEXEC)", fd)
-
-	if err := verifyTrustedBinary(fd, resolvedCmd); err != nil {
-		_ = unix.Close(fd)
-		fatal("refusing to exec untrusted binary %s: %v", resolvedCmd, err)
-	}
-
-	// Close leaked fds only AFTER the trust check so a refusal above still
-	// reaches syslog; keep the exec fd open for execveat.
-	closeHighFDs(fd)
+	// Exec fd is already open and verified above.
 
 	// fd-based exec only. No path-based fallback: a fallback would re-introduce
 	// the TOCTOU race that execveat eliminates. execveat is universal (≥3.19).

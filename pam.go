@@ -19,6 +19,7 @@ static void free_reply_upto(struct pam_response *reply, int upto) {
     if (!reply) return;
     for (int j = 0; j < upto; j++) {
         if (reply[j].resp) { free(reply[j].resp); reply[j].resp = NULL; }
+            reply[j].resp = NULL;
     }
     free(reply);
 }
@@ -131,6 +132,10 @@ static int dau_conv(int num_msg,
                 return PAM_CONV_ERR;
             }
             buf[strcspn(buf, "\r\n")] = '\0';
+            // FIX: Consume remaining input if the line was truncated
+            if (strlen(buf) == sizeof(buf) - 1 && buf[sizeof(buf)-2] != '\n') {
+                int c; while ((c = getchar()) != '\n' && c != EOF) {}
+            }
             reply[i].resp = strdup(buf);
             if (!reply[i].resp) {
                 free_reply_upto(reply, i);
@@ -253,22 +258,16 @@ func (p *pamHandle) setCred() error {
 
 func (p *pamHandle) end() { C.pam_end(p.h, C.PAM_SUCCESS) }
 
-// pamServiceFallbacks is empty by default: dau is fail-closed and only uses
-// /etc/pam.d/dau. Deliberately not exported for runtime mutation.
-var pamServiceFallbacks = []string{}
-
 func authenticateUser(invoker string) error {
-	candidates := append([]string{"dau"}, pamServiceFallbacks...)
-	var service string
-	for _, svc := range candidates {
-		if _, err := os.Stat("/etc/pam.d/" + svc); err == nil {
-			service = svc
-			break
-		}
-	}
-	if service == "" {
+	service := "dau"
+	fi, err := os.Stat("/etc/pam.d/" + service)
+	if err != nil {
 		auditLog("AUTH_FAIL", fmt.Sprintf("no PAM service found (invoker=%s)", invoker))
-		return fmt.Errorf("no usable PAM service %v present (fail-closed)", candidates)
+		return fmt.Errorf("no usable PAM service %q present (fail-closed)", service)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != 0 || fi.Mode().Perm()&0022 != 0 {
+		return fmt.Errorf("PAM service %q is not owned by root or is group/other writable", service)
 	}
 	auditLog("AUTH", fmt.Sprintf("service=%s invoker=%s", service, invoker))
 

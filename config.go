@@ -35,7 +35,7 @@ type Config struct{ Rules []Rule }
 
 func loadConfig() *Config {
 	vlogf("config: opening %s (O_RDONLY|O_NOFOLLOW)", confPath)
-	f, err := os.OpenFile(confPath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(confPath, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		fatal("config: open: %v", err)
 	}
@@ -57,8 +57,8 @@ func loadConfig() *Config {
 	if st.Uid != 0 || st.Gid != 0 {
 		fatal("config: %s must be owned root:root (got %d:%d)", confPath, st.Uid, st.Gid)
 	}
-	if perm := fi.Mode().Perm(); perm != 0600 && perm != 0644 {
-		fatal("config: %s has mode %04o; must be 0600 or 0644", confPath, perm)
+	if perm := fi.Mode().Perm(); perm != 0600 {
+		fatal("config: %s has mode %04o; must be 0600", confPath, perm)
 	}
 
 	cfg := &Config{}
@@ -161,6 +161,8 @@ func matchArgSpec(spec, got []string) bool {
 		if spec[i] == got[i] {
 			continue
 		}
+		// Note: path.Match uses glob patterns (e.g., *, ?, [abc]). The slash '/' is treated
+		// as a literal character, which is correct for argument matching but differs from filepath.Match.
 		ok, err := path.Match(spec[i], got[i])
 		if err != nil || !ok {
 			return false
