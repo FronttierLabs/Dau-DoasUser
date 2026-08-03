@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const Version = "v1.0.0-peregrine"
+const Version = "v1.1.0-shrike"
 
 var sysLog *syslog.Writer
 
@@ -250,10 +250,9 @@ func getUserShell(username string) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr,
-		"Usage: dau [-v] [-u target_user] [--] command [args…]\n"+
-			"       dau [-v] [-u target_user]     # opens target's shell\n"+
-			"  -v, --verbose   exhaustive trace on stderr (debug only; do not use in prod)\n")
+	fmt.Fprintf(os.Stderr, `Usage: dau [-v] [-u target_user] [--] command [args…]
+  -v, --verbose   exhaustive trace on stderr (debug only)
+`)
 	os.Exit(1)
 }
 
@@ -371,11 +370,7 @@ func main() {
 	}
 
 	if cli.Command == "" {
-		cli.Command = getUserShell(targetU.Username)
-		if cli.Command == "" {
-			cli.Command = "/bin/sh"
-		}
-		cli.Args = []string{cli.Command}
+		fatal("no command specified")
 	}
 	cmdArgs := []string{}
 	if len(cli.Args) > 1 {
