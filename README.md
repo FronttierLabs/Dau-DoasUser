@@ -1,50 +1,93 @@
 # dau — do as user
 
 A minimal, PAM-backed privilege-escalation utility for Linux, written in Go + CGO.
-A tiny, auditable `sudo`/`doas` alternative.
+Think of it as a tiny, auditable `sudo`/`doas` alternative.
+
+Current release: `v1.1.0-shrike`
 
 ## Features
-- PAM auth against the `dau` service (fail-closed, no silent fallback)
-- setuid-root with careful drop / re-acquire (`setresuid`)
+- PAM authentication against the `dau` service (fail-closed, no silent fallback)
+- setuid-root with careful privilege drop / re-acquire (`setresuid`)
 - Argument-restricted policy rules (`permit … cmd … args …`)
-- TOCTOU-safe exec via `execveat(AT_EMPTY_PATH)` on an `O_NOFOLLOW` fd (no path fallback)
-- Trusted-binary invariant: target must be root-owned, non-writable, in a trusted dir
-- Hardened child env (hardcoded `safePATH`, LANG/TERM allowlists, no `LD_*`)
-- FD hygiene, umask pinning, config hardening (`O_NOFOLLOW` + `fstat`)
-- Audit trail to `LOG_AUTHPRIV` syslog; exhaustive `-v` trace (debug only)
-
-## Build
-    sudo apt install build-essential gcc libpam0g-dev golang   # Debian/Ubuntu
-    export CGO_CFLAGS="-O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong"
-    CGO_ENABLED=1 go build -buildmode=pie -o dau -ldflags '-s -w' .
+- TOCTOU-safe exec via `execveat(AT_EMPTY_PATH)` on an `O_NOFOLLOW` fd
+- Hardened child env (hardcoded `safePATH`, LANG/TERM allowlists; nothing inherited)
+- Config hardening: root:root 0600 only, `O_NOFOLLOW` + `fstat` (no TOCTOU/symlink)
+- Full audit trail to `LOG_AUTHPRIV` syslog
+- Exhaustive `-v` trace for debugging
 
 ## Install (as root)
-    sudo ./install.sh
+
+There is intentionally no installer script — the steps below ARE the installer.
+Run everything as root (`sudo -i` first, or prefix each command with `sudo`).
+
+### Debian / Ubuntu (tested on Debian 13 live)
+
+```bash
+apt-get update
+apt-get install -y --no-install-recommends build-essential golang-go libpam0g-dev git
+git clone https://github.com/yuy806684-ai/Dau-DoasUser.git
+cd Dau-DoasUser
+export CGO_ENABLED=1
+export CGO_CFLAGS="-O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong"
+go build -buildmode=pie -o dau -ldflags '-s -w' .
+install -m 4755 -o root -g root ./dau /usr/local/bin/dau
+install -m 0600 -o root -g root examples/dau.conf /etc/dau.conf
+printf '#%%PAM-1.0\nauth      include     common-auth\naccount   include     common-account\n' > /etc/pam.d/dau
+chmod 0644 /etc/pam.d/dau
+```
+
+### Arch / CachyOS
+
+```bash
+pacman -Sy --noconfirm base-devel go git
+git clone https://github.com/yuy806684-ai/Dau-DoasUser.git
+cd Dau-DoasUser
+export CGO_ENABLED=1
+export CGO_CFLAGS="-O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong"
+go build -buildmode=pie -o dau -ldflags '-s -w' .
+install -m 4755 -o root -g root ./dau /usr/local/bin/dau
+install -m 0600 -o root -g root examples/dau.conf /etc/dau.conf
+printf '#%%PAM-1.0\nauth      include     system-auth\naccount   include     system-auth\n' > /etc/pam.d/dau
+chmod 0644 /etc/pam.d/dau
+```
+
+### Post-install (both distros)
+
+- Edit `/etc/dau.conf` to your policy. It must stay `0600 root:root` or `dau` refuses to read it.
+  - Arch: `permit @wheel as root` (wheel exists)
+  - Debian: `permit @sudo as root` (Debian uses the sudo group, not wheel)
+- On live ISOs: set a password for the invoking user first (`passwd`); PAM needs one.
+- Verify: `dau -version` and `dau id`.
+
+### Symlinked binaries are refused (by design)
+
+`dau` opens the target with `O_NOFOLLOW`, so commands that are symlinks
+(e.g. `reboot` → `systemctl` on Debian) fail with "too many levels of symbolic links".
+Invoke the real binary instead: `dau systemctl reboot`, or pin the absolute real path in your policy.
 
 ## Policy (`/etc/dau.conf`)
-    permit @wheel as root                                      # blanket (logged as risk)
-    permit alice as root cmd /usr/bin/systemctl args restart -- nginx
-    permit bob   as root cmd /usr/bin/journalctl args -*
 
-> ⚠️ **GTFOBins warning.** Pinning a command is NOT enough by itself. Binaries
-> like `less`, `more`, `vim`, `journalctl`, `awk`, `find`, `tar`, `python`
-> can spawn a shell or read arbitrary files from *inside* them (`!sh`, `v`,
-> `-exec`, `--checkpoint-action`, …). Once such a binary runs as root, the
-> restriction is defeated. **Only permit binaries you have verified have no
-> shell-escape or arbitrary-file-read hatch.** Prefer `args any` only for
-> binaries with no interactive escape (e.g. `id`, `systemctl`).
+```
+permit @wheel as root                                   # blanket (logged as risk)
+permit alice as root cmd /usr/bin/systemctl args restart -- nginx
+permit bob as root cmd /usr/bin/journalctl args -*
+permit carol as root cmd /usr/bin/less args any         # explicit opt-in
+```
 
-## Security model
-- Exec is strictly `execveat(AT_EMPTY_PATH)` on an `O_NOFOLLOW` fd — no path
-  fallback (a fallback would re-open a TOCTOU race).
-- Every executed binary must be root-owned, not group/other-writable, and in a
-  root-owned non-writable directory (applies to absolute paths AND safePATH names).
-- Auth lifecycle: auth + account + setcred. No PAM session (dau execs directly;
-  on SELinux/MLS systems note the child keeps dau's context).
-- The 2s failure delay is only a speed-bump; real lockout must come from
-  `pam_faillock` (or equivalent) in your PAM stack.
-- `-v` is for debugging only; never enable it in production logs.
+## Security model (read this)
+
+- **Trusted-binary invariant:** every executed binary must be root-owned, not
+  group/other-writable, and live in a root-owned, non-writable directory.
+- **No path fallback:** exec is strictly `execveat(AT_EMPTY_PATH)` on an
+  `O_NOFOLLOW` fd; a path fallback would re-open the TOCTOU race.
+- **No interactive shell:** `dau` with no command fails closed (`no command specified`).
+- **Auth lifecycle:** authenticate + account + setcred. No PAM session
+  (dau execs directly and cannot close a session after the fact).
+- **Rate limiting:** the 2s failure delay is only a speed-bump; real lockout
+  must come from `pam_faillock` (or equivalent) in your PAM stack.
+- **`-v` is for debugging only**; never enable it in production.
 - The policy file is read as root by design (it is 0600 root:root).
 
 ## License
-MIT
+
+MIT — see `LICENSE`.
