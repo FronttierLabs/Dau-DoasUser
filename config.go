@@ -198,7 +198,10 @@ func matchRule(rule Rule, invokerUID uint32, invokerGIDs []uint32,
 		if err != nil {
 			return false, fmt.Sprintf("group %q lookup failed", rule.Identity)
 		}
-		gid, _ := strconv.ParseUint(g.Gid, 10, 32)
+		gid, err := strconv.ParseUint(g.Gid, 10, 32)
+		if err != nil {
+			return false // malformed group gid — fail closed, never guess
+		}
 		for _, id := range invokerGIDs {
 			if uint32(gid) == id {
 				return true, ""
@@ -210,7 +213,10 @@ func matchRule(rule Rule, invokerUID uint32, invokerGIDs []uint32,
 	if err != nil {
 		return false, fmt.Sprintf("user %q lookup failed", rule.Identity)
 	}
-	uid, _ := strconv.ParseUint(u.Uid, 10, 32)
+	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		return false // malformed user uid — fail closed
+	}
 	if uint32(uid) != invokerUID {
 		return false, fmt.Sprintf("identity uid %d != invoker uid %d", uid, invokerUID)
 	}

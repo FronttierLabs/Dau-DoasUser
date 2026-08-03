@@ -60,9 +60,17 @@ func getSupplementaryGIDs() []uint32 {
 	if err != nil {
 		return nil
 	}
-	out := make([]uint32, len(gids))
-	for i, g := range gids {
-		out[i] = safeUint32(g)
+	// getgroups(2) does not guarantee the primary GID is present (cron,
+	// containers, su without -l). Include it explicitly so @group rules that
+	// match the primary group work. This only adds a group the caller already
+	// has, so it cannot over-grant.
+	primary := getRealGID()
+	out := make([]uint32, 0, len(gids)+1)
+	out = append(out, primary)
+	for _, g := range gids {
+		if gu := safeUint32(g); gu != primary {
+			out = append(out, gu)
+		}
 	}
 	return out
 }
@@ -109,6 +117,11 @@ func setTargetCredentials(uid, gid uint32, supGids []int) error {
 const safePATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 var envTokenRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.@-]*$`)
+
+// Strict charset for the attacker-controlled -u value, validated before the
+// root-privileged NSS lookup. Rejects anything that could confuse NSS or
+// carry metacharacters.
+var usernameRe = regexp.MustCompile(`^[A-Za-z0-9._][A-Za-z0-9._-]{0,31}$`)
 
 var allowedLocales = map[string]struct{}{
 	"C": {}, "POSIX": {}, "C.UTF-8": {}, "en_US.UTF-8": {}, "en_GB.UTF-8": {},
@@ -236,11 +249,10 @@ func verifyTrustedBinary(fd int, path string) error {
 	return nil
 }
 
-func closeHighFDs() {
-	if err := unix.CloseRange(3, ^uint(0)>>1, 0); err == nil {
-		vlogf("fd: close_range(3..) ok")
-		return
-	}
+// closeHighFDs closes every descriptor > 2 except `except` (the exec fd), so
+// nothing we opened leaks into the child. Called AFTER the final trust check
+// so a verifyTrustedBinary refusal above can still reach syslog.
+func closeHighFDs(except int) {
 	f, err := os.Open("/proc/self/fd")
 	if err != nil {
 		return
@@ -250,12 +262,12 @@ func closeHighFDs() {
 	closed := 0
 	for _, n := range names {
 		fd, err := strconv.Atoi(n)
-		if err == nil && fd > 2 {
+		if err == nil && fd > 2 && fd != except {
 			_ = unix.Close(fd)
 			closed++
 		}
 	}
-	vlogf("fd: closed %d descriptors >2 via /proc", closed)
+	vlogf("fd: closed %d descriptors >2 via /proc (kept fd %d)", closed, except)
 }
 
 // getUserShell reads /etc/passwd because Go's os/user.User has no Shell
@@ -380,6 +392,11 @@ func main() {
 	setPamVerbose(verbose)
 	vlogf("args: target=%q cmd=%q args=%v", cli.TargetUser, cli.Command, cli.Args)
 
+	// Validate the attacker-controlled -u value BEFORE the root-privileged
+	// NSS lookup (user.Lookup).
+	if !usernameRe.MatchString(cli.TargetUser) {
+		fatal("invalid target username %q", cli.TargetUser)
+	}
 	targetU, err := user.Lookup(cli.TargetUser)
 	if err != nil {
 		fatal("unknown target user %q: %v", cli.TargetUser, err)
@@ -445,10 +462,16 @@ func main() {
 
 	env := sanitizeEnv(targetU)
 
-	targetGids, _ := targetU.GroupIds()
+	targetGids, err := targetU.GroupIds()
+	if err != nil {
+		fatal("cannot enumerate groups for target %q: %v", cli.TargetUser, err)
+	}
 	supGids := make([]int, 0, len(targetGids))
 	for _, g := range targetGids {
-		gid, _ := strconv.Atoi(g)
+		gid, err := strconv.Atoi(g)
+		if err != nil || gid < 0 {
+			fatal("invalid gid %q for target user %q (refusing to guess)", g, cli.TargetUser)
+		}
 		supGids = append(supGids, gid)
 	}
 	if err := setTargetCredentials(uint32(targetUID), uint32(targetGID), supGids); err != nil {
@@ -463,8 +486,6 @@ func main() {
 	argv[0] = cli.Command // preserve the user-invoked name as argv[0]
 	vlogf("execveat argv=%v", argv)
 
-	closeHighFDs()
-
 	fd, err := unix.Open(resolvedCmd, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		fatal("open %s: %v", resolvedCmd, err)
@@ -475,6 +496,10 @@ func main() {
 		_ = unix.Close(fd)
 		fatal("refusing to exec untrusted binary %s: %v", resolvedCmd, err)
 	}
+
+	// Close leaked fds only AFTER the trust check so a refusal above still
+	// reaches syslog; keep the exec fd open for execveat.
+	closeHighFDs(fd)
 
 	// fd-based exec only. No path-based fallback: a fallback would re-introduce
 	// the TOCTOU race that execveat eliminates. execveat is universal (≥3.19).
