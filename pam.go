@@ -4,21 +4,20 @@ package main
 #cgo LDFLAGS: -lpam
 
 #include <security/pam_appl.h>
-#include <grp.h>
-
-static int dau_initgroups(const char *user, gid_t gid) {
-    return initgroups(user, gid);
-}
-
 #include <stdlib.h>
 #include <string.h>
 #include <termios.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <errno.h>
+#include <grp.h>
 
 static int g_verbose = 0;
 static void dau_set_verbose(int v) { g_verbose = v; }
+
+static int dau_initgroups(const char *user, gid_t gid) {
+    return initgroups(user, gid);
+}
 
 static void free_reply_upto(struct pam_response *reply, int upto) {
     if (!reply) return;
@@ -59,9 +58,6 @@ static int dau_conv(int num_msg,
             int raw_ok = 0;
             if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &oldt) == 0) {
                 rawt = oldt;
-                // Standard POSIX approach: just disable ECHO. 
-                // We intentionally drop ICANON/ISIG manipulation and '*' masking 
-                // to eliminate custom signal (SIGTSTP/Ctrl+Z) terminal state leaks.
                 rawt.c_lflag &= ~(tcflag_t)(ECHO | ECHOE | ECHOK);
                 if (tcsetattr(STDIN_FILENO, TCSANOW, &rawt) == 0)
                     raw_ok = 1;
@@ -75,8 +71,6 @@ static int dau_conv(int num_msg,
                 return PAM_CONV_ERR;
             }
             buf[strcspn(buf, "\r\n")] = '\0';
-            
-            // Drain remaining stdin if buffer maxed to prevent password leak to child shell
             if (strlen(buf) == sizeof(buf) - 1) {
                 int c;
                 while ((c = fgetc(stdin)) != '\n' && c != EOF) {}
@@ -113,7 +107,6 @@ static int dau_conv(int num_msg,
             if (len > 0 && buf[len-1] == '\n') {
                 buf[len-1] = '\0';
             } else {
-                // Drain truncated input so it doesn't leak to the shell
                 int c;
                 while ((c = fgetc(stdin)) != '\n' && c != EOF) {}
             }
@@ -153,13 +146,9 @@ import "C"
 import (
 	"fmt"
 	"os"
-	"os/user"
 	"syscall"
 	"unsafe"
 )
-
-type pamHandle struct{ h *C.pam_handle_t }
-
 
 func initGroups(user string, gid uint32) error {
 	cUser := C.CString(user)
@@ -169,6 +158,8 @@ func initGroups(user string, gid uint32) error {
 	}
 	return nil
 }
+
+type pamHandle struct{ h *C.pam_handle_t }
 
 func setPamVerbose(on bool) {
 	if on {
@@ -238,15 +229,6 @@ func (p *pamHandle) acctMgmt() error {
 	return nil
 }
 
-func (p *pamHandle) setCred() error {
-	rc := C.pam_setcred(p.h, C.PAM_ESTABLISH_CRED)
-	if rc != C.PAM_SUCCESS {
-		return fmt.Errorf("pam_setcred: %s", C.GoString(C.pam_strerror(nil, rc)))
-	}
-	vlogf("pam_setcred ok")
-	return nil
-}
-
 func (p *pamHandle) end() { C.pam_end(p.h, C.PAM_SUCCESS) }
 
 func authenticateUser(invoker string) error {
@@ -255,19 +237,28 @@ func authenticateUser(invoker string) error {
 	fi, err := os.Lstat(pamPath)
 	if err != nil {
 		auditLog("AUTH_FAIL", fmt.Sprintf("no PAM service found (invoker=%s)", invoker))
-		return fmt.Errorf("no usable PAM service %q present (fail-closed)", service)
+		return fmt.Errorf("no usable PAM service %s present (fail-closed)", service)
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("PAM service %q must not be a symlink (fail-closed)", pamPath)
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != 0 || fi.Mode().Perm()&0022 != 0 {
-		return fmt.Errorf("PAM service %q must be root-owned and non-writable", pamPath)
+	if !ok {
+		return fmt.Errorf("cannot stat PAM service")
+	}
+	if st.Uid != 0 || st.Gid != 0 {
+		return fmt.Errorf("PAM service %s must be root-owned", pamPath)
+	}
+	if fi.Mode().Perm()&0022 != 0 {
+		return fmt.Errorf("PAM service %s must not be group/other-writable", pamPath)
 	}
 
 	auditLog("AUTH", fmt.Sprintf("service=%s invoker=%s", service, invoker))
+
 	ph, err := pamStart(service, invoker)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer ph.end()
 
 	ph.setPamContext()
@@ -280,12 +271,4 @@ func authenticateUser(invoker string) error {
 		return err
 	}
 	return nil
-}
-
-func whoami() string {
-	u, err := user.LookupId(fmt.Sprintf("%d", syscall.Getuid()))
-	if err != nil {
-		return fmt.Sprintf("uid=%d", syscall.Getuid())
-	}
-	return u.Username
 }

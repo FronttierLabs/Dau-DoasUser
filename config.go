@@ -233,10 +233,3 @@ func (c *Config) findRule(invokerUID uint32, invokerGIDs []uint32,
 	}
 	return nil
 }
-
-func fatal(format string, a ...any) {
-	msg := fmt.Sprintf(format, a...)
-	fmt.Fprintf(os.Stderr, "dau: %s\n", msg)
-	auditLog("FATAL", msg)
-	os.Exit(1)
-}
