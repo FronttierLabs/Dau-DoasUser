@@ -17,6 +17,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const Version = "v1.0.0-peregrine"
+
 var sysLog *syslog.Writer
 
 func initAudit() {
@@ -259,6 +261,9 @@ func parseArgs() cliArgs {
 	for i < len(osArgs) {
 		arg := osArgs[i]
 		switch {
+		case arg == "-version" || arg == "--version":
+			fmt.Printf("dau %s\n", Version)
+			os.Exit(0)
 		case arg == "-v" || arg == "--verbose":
 			verbose = true
 		case arg == "-u" || arg == "--user":
@@ -333,8 +338,8 @@ func main() {
 	if euid != 0 {
 		fatal("dau must be installed setuid-root (euid=%d)", euid)
 	}
-	auditLog("START", fmt.Sprintf("invoker_uid=%d target=pending", ruid))
-	vlogf("setuid verified: euid=%d ruid=%d rgid=%d", euid, ruid, getRealGID())
+	auditLog("START", fmt.Sprintf("version=%s invoker_uid=%d target=pending", Version, ruid))
+	vlogf("dau %s starting | setuid verified: euid=%d ruid=%d rgid=%d", Version, euid, ruid, getRealGID())
 
 	cli := parseArgs()
 	setPamVerbose(verbose)
