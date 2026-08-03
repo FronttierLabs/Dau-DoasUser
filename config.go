@@ -34,7 +34,7 @@ type Rule struct {
 type Config struct{ Rules []Rule }
 
 func loadConfig() *Config {
-	vlogf("config: opening %s (O_RDONLY|O_NOFOLLOW)", confPath)
+	vlogf("config: opening %s (O_RDONLY|O_NOFOLLOW|O_CLOEXEC)", confPath)
 	f, err := os.OpenFile(confPath, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		fatal("config: open: %v", err)
@@ -58,7 +58,7 @@ func loadConfig() *Config {
 		fatal("config: %s must be owned root:root (got %d:%d)", confPath, st.Uid, st.Gid)
 	}
 	if perm := fi.Mode().Perm(); perm != 0600 {
-		fatal("config: %s has mode %04o; must be 0600", confPath, perm)
+		fatal("config: %s has mode %04o; must be strictly 0600", confPath, perm)
 	}
 
 	cfg := &Config{}
@@ -161,8 +161,6 @@ func matchArgSpec(spec, got []string) bool {
 		if spec[i] == got[i] {
 			continue
 		}
-		// Note: path.Match uses glob patterns (e.g., *, ?, [abc]). The slash '/' is treated
-		// as a literal character, which is correct for argument matching but differs from filepath.Match.
 		ok, err := path.Match(spec[i], got[i])
 		if err != nil || !ok {
 			return false
@@ -171,8 +169,6 @@ func matchArgSpec(spec, got []string) bool {
 	return true
 }
 
-// matchRule returns (matched, reason). reason explains the first failing
-// condition so -v can show exactly why a rule rejected an invocation.
 func matchRule(rule Rule, invokerUID uint32, invokerGIDs []uint32,
 	targetUser, command string, cmdArgs []string) (bool, string) {
 

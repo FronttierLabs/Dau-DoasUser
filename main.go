@@ -60,10 +60,6 @@ func getSupplementaryGIDs() []uint32 {
 	if err != nil {
 		return nil
 	}
-	// getgroups(2) does not guarantee the primary GID is present (cron,
-	// containers, su without -l). Include it explicitly so @group rules that
-	// match the primary group work. This only adds a group the caller already
-	// has, so it cannot over-grant.
 	primary := getRealGID()
 	out := make([]uint32, 0, len(gids)+1)
 	out = append(out, primary)
@@ -118,9 +114,6 @@ const safePATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 var envTokenRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.@-]*$`)
 
-// Strict charset for the attacker-controlled -u value, validated before the
-// root-privileged NSS lookup. Rejects anything that could confuse NSS or
-// carry metacharacters.
 var usernameRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
 var allowedLocales = map[string]struct{}{
@@ -135,10 +128,6 @@ func envValueAllowed(v string) bool {
 }
 
 func sanitizeEnv(targetUser *user.User) []string {
-	// The child environment is constructed ENTIRELY from this allowlist.
-	// Nothing from the invoker's environment is inherited unless explicitly
-	// allowlisted, so LD_PRELOAD/IFS/etc. never reach the child and no
-	// Unsetenv of the current process env is required.
 	safe := map[string]string{
 		"HOME":    targetUser.HomeDir,
 		"USER":    targetUser.Username,
@@ -172,11 +161,6 @@ func sanitizeEnv(targetUser *user.User) []string {
 	return env
 }
 
-// dirTrustworthy reports whether dir is root-owned and not group/other
-// writable. It uses os.Stat on purpose: /bin and /sbin are symlinks to
-// /usr/bin and /usr/sbin on most distros, so we must follow the link and
-// trust the *resolved* directory. Rejecting symlinks here would break
-// resolution of standard system paths.
 func dirTrustworthy(dir string) bool {
 	fi, err := os.Stat(dir)
 	if err != nil || !fi.IsDir() {
@@ -195,9 +179,6 @@ func dirTrustworthy(dir string) bool {
 	return true
 }
 
-// resolveCommand maps a command to an absolute path. Absolute input is
-// returned as-is (trust is enforced later by verifyTrustedBinary). Bare
-// names are searched via safePATH with directory-trust checks.
 func resolveCommand(cmd string) string {
 	if filepath.IsAbs(cmd) {
 		vlogf("resolve: %q is absolute", cmd)
@@ -219,12 +200,6 @@ func resolveCommand(cmd string) string {
 	return ""
 }
 
-// verifyTrustedBinary enforces the trusted-binary invariant on an open fd:
-// the file must be a regular, root-owned, executable file that is not
-// group/other writable, and its parent directory must be root-owned and not
-// group/other writable. This applies to BOTH absolute paths from policy
-// rules and names resolved via safePATH, closing the gap where absolute
-// paths skipped all trust checks.
 func verifyTrustedBinary(fd int, path string) error {
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
@@ -249,8 +224,6 @@ func verifyTrustedBinary(fd int, path string) error {
 	return nil
 }
 
-// getUserShell reads /etc/passwd because Go's os/user.User has no Shell
-// field; this is the only stdlib way to obtain the login shell.
 func getUserShell(username string) string {
 	data, err := os.ReadFile("/etc/passwd")
 	if err != nil {
@@ -333,8 +306,6 @@ func stringsToNilPtrs(ss []string) []*byte {
 func execveat(dirfd int, path string, argv, envv []string, flags int) error {
 	argvPtrs := stringsToNilPtrs(argv)
 	envPtrs := stringsToNilPtrs(envv)
-	// Always pass a valid pointer to a NUL-terminated pathname; even for
-	// AT_EMPTY_PATH the kernel wants a valid pointer, not NULL (EFAULT).
 	pb := append([]byte(path), 0)
 	pathPtr := &pb[0]
 	_, _, errno := unix.Syscall6(unix.SYS_EXECVEAT,
@@ -344,8 +315,6 @@ func execveat(dirfd int, path string, argv, envv []string, flags int) error {
 		uintptr(unsafe.Pointer(&envPtrs[0])),    // #nosec G103
 		uintptr(flags),
 		0)
-	// The GC does not track pointers once cast via unsafe.Pointer; keep the
-	// backing arrays alive across the syscall.
 	runtime.KeepAlive(argvPtrs)
 	runtime.KeepAlive(envPtrs)
 	runtime.KeepAlive(pb)
@@ -371,8 +340,6 @@ func main() {
 	setPamVerbose(verbose)
 	vlogf("args: target=%q cmd=%q args=%v", cli.TargetUser, cli.Command, cli.Args)
 
-	// Validate the attacker-controlled -u value BEFORE the root-privileged
-	// NSS lookup (user.Lookup).
 	if !usernameRe.MatchString(cli.TargetUser) {
 		fatal("invalid target username %q", cli.TargetUser)
 	}
@@ -380,8 +347,14 @@ func main() {
 	if err != nil {
 		fatal("unknown target user %q: %v", cli.TargetUser, err)
 	}
-	targetUID, _ := strconv.ParseUint(targetU.Uid, 10, 32)
-	targetGID, _ := strconv.ParseUint(targetU.Gid, 10, 32)
+	targetUID, err := strconv.ParseUint(targetU.Uid, 10, 32)
+	if err != nil {
+		fatal("malformed target UID %q for user %q (fail closed)", targetU.Uid, cli.TargetUser)
+	}
+	targetGID, err := strconv.ParseUint(targetU.Gid, 10, 32)
+	if err != nil {
+		fatal("malformed target GID %q for user %q (fail closed)", targetU.Gid, cli.TargetUser)
+	}
 
 	if cli.Command == "" {
 		cli.Command = getUserShell(targetU.Username)
@@ -395,13 +368,13 @@ func main() {
 		cmdArgs = cli.Args[1:]
 	}
 
-	// Resolve to an absolute path BEFORE policy matching so restricted
-	// `cmd /abs/path` rules also match bare command names typed by the user.
 	resolvedCmd := resolveCommand(cli.Command)
 	if resolvedCmd == "" {
 		fatal("cannot resolve %q via safe PATH", cli.Command)
 	}
 
+	// TOCTOU fix: open and verify the binary IMMEDIATELY after resolution.
+	// The same fd is carried all the way to execveat.
 	fd, err := unix.Open(resolvedCmd, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		fatal("open %s: %v", resolvedCmd, err)
@@ -440,8 +413,13 @@ func main() {
 		fatal("regain root: %v", err)
 	}
 
+	invokerName := fmt.Sprintf("uid=%d", ruid)
+	if invokerU, err := user.LookupId(fmt.Sprintf("%d", ruid)); err == nil {
+		invokerName = invokerU.Username
+	}
+
 	if !rule.NoPasswd {
-		if err := authenticateUser(whoami()); err != nil {
+		if err := authenticateUser(invokerName); err != nil {
 			auditLog("AUTH_FAIL", fmt.Sprintf("uid=%d target=%s: %v", ruid, cli.TargetUser, err))
 			time.Sleep(2 * time.Second) // speed-bump; pam_faillock does real lockout
 			fatal("authentication failed: %v", err)
@@ -476,10 +454,7 @@ func main() {
 	argv[0] = cli.Command // preserve the user-invoked name as argv[0]
 	vlogf("execveat argv=%v", argv)
 
-	// Exec fd is already open and verified above.
-
-	// fd-based exec only. No path-based fallback: a fallback would re-introduce
-	// the TOCTOU race that execveat eliminates. execveat is universal (≥3.19).
+	// fd-based exec only. No path-based fallback.
 	if err := execveat(fd, "", argv, env, unix.AT_EMPTY_PATH); err != nil {
 		_ = unix.Close(fd)
 		fatal("execveat %s: %v (no fallback by design)", resolvedCmd, err)

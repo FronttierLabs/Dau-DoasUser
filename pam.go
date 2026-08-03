@@ -14,12 +14,10 @@ package main
 static int g_verbose = 0;
 static void dau_set_verbose(int v) { g_verbose = v; }
 
-// Free resp strings [0,upto) and the reply array (OOM cleanup).
 static void free_reply_upto(struct pam_response *reply, int upto) {
     if (!reply) return;
     for (int j = 0; j < upto; j++) {
         if (reply[j].resp) { free(reply[j].resp); reply[j].resp = NULL; }
-            reply[j].resp = NULL;
     }
     free(reply);
 }
@@ -53,13 +51,8 @@ static int dau_conv(int num_msg,
 
             struct termios oldt, rawt;
             int raw_ok = 0;
-            // Only touch the terminal if stdin really is a TTY and tcgetattr
-            // succeeds; otherwise oldt would be uninitialized garbage.
             if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &oldt) == 0) {
                 rawt = oldt;
-                // Clear ECHO, ICANON and ISIG. Clearing ISIG makes Ctrl-C
-                // arrive as byte 0x03 so WE restore the terminal, instead of
-                // SIGINT killing us and leaving the tty in raw mode.
                 rawt.c_lflag &= ~(tcflag_t)(ECHO | ICANON | ISIG);
                 rawt.c_cc[VMIN]  = 1;
                 rawt.c_cc[VTIME] = 0;
@@ -71,7 +64,6 @@ static int dau_conv(int num_msg,
             int  len = 0;
 
             if (!raw_ok) {
-                // Non-tty (piped) input: read a line, no masking possible.
                 if (!fgets(buf, sizeof(buf), stdin)) {
                     free_reply_upto(reply, i);
                     *resp = NULL;
@@ -85,7 +77,7 @@ static int dau_conv(int num_msg,
                     unsigned char c;
                     ssize_t r = read(STDIN_FILENO, &c, 1);
                     if (r != 1) {
-                        if (r < 0 && errno == EINTR) continue; // retry on signal
+                        if (r < 0 && errno == EINTR) continue;
                         break;
                     }
                     if (c == '\n' || c == '\r') {
@@ -105,6 +97,13 @@ static int dau_conv(int num_msg,
                     }
                 }
                 buf[len] = '\0';
+                // Drain remaining stdin if buffer maxed to prevent password leak to child shell
+                if (len == (int)sizeof(buf) - 1) {
+                    unsigned char drain;
+                    while (read(STDIN_FILENO, &drain, 1) == 1) {
+                        if (drain == '\n' || drain == '\r') break;
+                    }
+                }
                 tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
                 fprintf(stderr, "\n");
                 fflush(stderr);
@@ -131,10 +130,13 @@ static int dau_conv(int num_msg,
                 *resp = NULL;
                 return PAM_CONV_ERR;
             }
-            buf[strcspn(buf, "\r\n")] = '\0';
-            // FIX: Consume remaining input if the line was truncated
-            if (strlen(buf) == sizeof(buf) - 1 && buf[sizeof(buf)-2] != '\n') {
-                int c; while ((c = getchar()) != '\n' && c != EOF) {}
+            size_t len = strlen(buf);
+            if (len > 0 && buf[len-1] == '\n') {
+                buf[len-1] = '\0';
+            } else {
+                // Drain truncated input so it doesn't leak to the shell
+                int c;
+                while ((c = fgetc(stdin)) != '\n' && c != EOF) {}
             }
             reply[i].resp = strdup(buf);
             if (!reply[i].resp) {
@@ -260,15 +262,23 @@ func (p *pamHandle) end() { C.pam_end(p.h, C.PAM_SUCCESS) }
 
 func authenticateUser(invoker string) error {
 	service := "dau"
-	fi, err := os.Stat("/etc/pam.d/" + service)
+	pamPath := "/etc/pam.d/" + service
+	fi, err := os.Stat(pamPath)
 	if err != nil {
 		auditLog("AUTH_FAIL", fmt.Sprintf("no PAM service found (invoker=%s)", invoker))
-		return fmt.Errorf("no usable PAM service %q present (fail-closed)", service)
+		return fmt.Errorf("no usable PAM service %s present (fail-closed)", service)
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != 0 || fi.Mode().Perm()&0022 != 0 {
-		return fmt.Errorf("PAM service %q is not owned by root or is group/other writable", service)
+	if !ok {
+		return fmt.Errorf("cannot stat PAM service")
 	}
+	if st.Uid != 0 || st.Gid != 0 {
+		return fmt.Errorf("PAM service %s must be root-owned", pamPath)
+	}
+	if fi.Mode().Perm()&0022 != 0 {
+		return fmt.Errorf("PAM service %s must not be group/other-writable", pamPath)
+	}
+
 	auditLog("AUTH", fmt.Sprintf("service=%s invoker=%s", service, invoker))
 
 	ph, err := pamStart(service, invoker)
