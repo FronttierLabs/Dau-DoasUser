@@ -38,6 +38,8 @@ func auditLog(tag, msg string) {
 	fmt.Fprintf(os.Stderr, "dau-audit: %s\n", line)
 }
 
+
+//prints for verbose statement - can be removed i just like seeing what my shit does while its being executed
 var verbose bool
 
 func vlogf(format string, a ...any) {
@@ -73,6 +75,8 @@ func getSupplementaryGIDs() []uint32 {
 	return out
 }
 
+
+//elavates the user privileges to root then drops down - needed
 func dropToUser(uid, gid uint32) error {
 	if err := unix.Setgroups([]int{int(gid)}); err != nil {
 		return fmt.Errorf("setgroups: %w", err)
@@ -98,20 +102,19 @@ func regainRoot() error {
 	return nil
 }
 
-func setTargetCredentials(uid, gid uint32, supGids []int) error {
-	if err := unix.Setgroups(supGids); err != nil {
-		return fmt.Errorf("setgroups(target): %w", err)
-	}
+func setTargetCredentials(uid, gid uint32) error {
 	if err := unix.Setresgid(int(gid), int(gid), int(gid)); err != nil {
 		return fmt.Errorf("setresgid(target): %w", err)
 	}
 	if err := unix.Setresuid(int(uid), int(uid), int(uid)); err != nil {
 		return fmt.Errorf("setresuid(target): %w", err)
 	}
-	vlogf("target credentials set uid=%d gid=%d groups=%v", uid, gid, supGids)
+	vlogf("target credentials set uid=%d gid=%d (groups set by initgroups)", uid, gid)
 	return nil
 }
 
+
+//path needed for dau if removed dau wont execute - needed
 const safePATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 var envTokenRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.@-]*$`)
@@ -378,8 +381,10 @@ func main() {
 		fatal("cannot resolve %q via safe PATH", cli.Command)
 	}
 
-	// TOCTOU fix: open and verify the binary IMMEDIATELY after resolution.
-	// The same fd is carried all the way to execveat.
+// TOCTOU fix: open and verify the binary IMMEDIATELY after resolution - not temp fix?
+// the same fd is carried all the way to execveat - kinda needed
+	// TOCTOU fix: open and verify the binary IMMEDIATELY after resolution - not temp fix?
+	// the same fd is carried all the way to execveat - kinda needed
 	fd, err := unix.Open(resolvedCmd, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		fatal("open %s: %v", resolvedCmd, err)
@@ -402,6 +407,7 @@ func main() {
 		fatal("drop privileges: %v", err)
 	}
 
+//cheks user prev
 	rule := cfg.findRule(ruid, invokerGIDs, cli.TargetUser, resolvedCmd, cmdArgs)
 	if rule == nil {
 		auditLog("DENY", fmt.Sprintf("uid=%d target=%s cmd=%s args=%v – no matching rule",
@@ -435,19 +441,14 @@ func main() {
 
 	env := sanitizeEnv(targetU)
 
-	targetGids, err := targetU.GroupIds()
-	if err != nil {
-		fatal("cannot enumerate groups for target %q: %v", cli.TargetUser, err)
+// delegate group resolution to POSIX initgroups(3) It is heavily audited
+// handles NSS edge cases natively and prevents Go level parsing bugs - needed 'might be temp'
+	// delegate group resolution to POSIX initgroups(3) It is heavily audited
+	// handles NSS edge cases natively and prevents Go level parsing bugs - needed 'might be temp'
+	if err := initGroups(cli.TargetUser, uint32(targetGID)); err != nil {
+		fatal("initgroups(%q): %v", cli.TargetUser, err)
 	}
-	supGids := make([]int, 0, len(targetGids))
-	for _, g := range targetGids {
-		gid, err := strconv.Atoi(g)
-		if err != nil || gid < 0 {
-			fatal("invalid gid %q for target user %q (refusing to guess)", g, cli.TargetUser)
-		}
-		supGids = append(supGids, gid)
-	}
-	if err := setTargetCredentials(uint32(targetUID), uint32(targetGID), supGids); err != nil {
+	if err := setTargetCredentials(uint32(targetUID), uint32(targetGID)); err != nil {
 		fatal("set target credentials: %v", err)
 	}
 
@@ -459,7 +460,7 @@ func main() {
 	argv[0] = cli.Command // preserve the user-invoked name as argv[0]
 	vlogf("execveat argv=%v", argv)
 
-	// fd-based exec only. No path-based fallback.
+// fd-based exec only no path-based fallback - due to couple security exploits
 	if err := execveat(fd, "", argv, env, unix.AT_EMPTY_PATH); err != nil {
 		_ = unix.Close(fd)
 		fatal("execveat %s: %v (no fallback by design)", resolvedCmd, err)

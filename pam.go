@@ -4,6 +4,12 @@ package main
 #cgo LDFLAGS: -lpam
 
 #include <security/pam_appl.h>
+#include <grp.h>
+
+static int dau_initgroups(const char *user, gid_t gid) {
+    return initgroups(user, gid);
+}
+
 #include <stdlib.h>
 #include <string.h>
 #include <termios.h>
@@ -53,63 +59,36 @@ static int dau_conv(int num_msg,
             int raw_ok = 0;
             if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &oldt) == 0) {
                 rawt = oldt;
-                rawt.c_lflag &= ~(tcflag_t)(ECHO | ICANON | ISIG);
-                rawt.c_cc[VMIN]  = 1;
-                rawt.c_cc[VTIME] = 0;
+                // Standard POSIX approach: just disable ECHO. 
+                // We intentionally drop ICANON/ISIG manipulation and '*' masking 
+                // to eliminate custom signal (SIGTSTP/Ctrl+Z) terminal state leaks.
+                rawt.c_lflag &= ~(tcflag_t)(ECHO | ECHOE | ECHOK);
                 if (tcsetattr(STDIN_FILENO, TCSANOW, &rawt) == 0)
                     raw_ok = 1;
             }
 
             char buf[1024];
-            int  len = 0;
-
-            if (!raw_ok) {
-                if (!fgets(buf, sizeof(buf), stdin)) {
-                    free_reply_upto(reply, i);
-                    *resp = NULL;
-                    return PAM_CONV_ERR;
-                }
-                buf[strcspn(buf, "\r\n")] = '\0';
-                len = (int)strlen(buf);
-            } else {
-                int done = 0;
-                while (!done && len < (int)sizeof(buf) - 1) {
-                    unsigned char c;
-                    ssize_t r = read(STDIN_FILENO, &c, 1);
-                    if (r != 1) {
-                        if (r < 0 && errno == EINTR) continue;
-                        break;
-                    }
-                    if (c == '\n' || c == '\r') {
-                        done = 1;
-                    } else if (c == 3) {
-                        tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-                        fprintf(stderr, "\n");
-                        memset(buf, 0, sizeof(buf));
-                        free_reply_upto(reply, i);
-                        *resp = NULL;
-                        return PAM_CONV_ERR;
-                    } else if (c == 127 || c == 8) {
-                        if (len > 0) { len--; fprintf(stderr, "\b \b"); }
-                    } else if (c >= 32) {
-                        buf[len++] = (char)c;
-                        fputc('*', stderr);
-                    }
-                }
-                buf[len] = '\0';
-                // Drain remaining stdin if buffer maxed to prevent password leak to child shell
-                if (len == (int)sizeof(buf) - 1) {
-                    unsigned char drain;
-                    while (read(STDIN_FILENO, &drain, 1) == 1) {
-                        if (drain == '\n' || drain == '\r') break;
-                    }
-                }
-                tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-                fprintf(stderr, "\n");
-                fflush(stderr);
-                if (g_verbose)
-                    fprintf(stderr, "dau-verbose: tty restored, read %d chars\n", len);
+            if (!fgets(buf, sizeof(buf), stdin)) {
+                if (raw_ok) tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+                free_reply_upto(reply, i);
+                *resp = NULL;
+                return PAM_CONV_ERR;
             }
+            buf[strcspn(buf, "\r\n")] = '\0';
+            
+            // Drain remaining stdin if buffer maxed to prevent password leak to child shell
+            if (strlen(buf) == sizeof(buf) - 1) {
+                int c;
+                while ((c = fgetc(stdin)) != '\n' && c != EOF) {}
+            }
+
+            if (raw_ok) {
+                tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+                if (g_verbose)
+                    fprintf(stderr, "dau-verbose: tty restored\n");
+            }
+            fprintf(stderr, "\n");
+            fflush(stderr);
 
             reply[i].resp = strdup(buf);
             { volatile char *p = buf; while (*p) *p++ = 0; }
@@ -180,6 +159,16 @@ import (
 )
 
 type pamHandle struct{ h *C.pam_handle_t }
+
+
+func initGroups(user string, gid uint32) error {
+	cUser := C.CString(user)
+	defer C.free(unsafe.Pointer(cUser))
+	if C.dau_initgroups(cUser, C.gid_t(gid)) != 0 {
+		return fmt.Errorf("initgroups(%q) failed", user)
+	}
+	return nil
+}
 
 func setPamVerbose(on bool) {
 	if on {
