@@ -1,0 +1,7 @@
+#%PAM-1.0
+# dau runs auth + account + setcred only. It execs directly (no fork/wait),
+# so it cannot keep a PAM session open across the child's lifetime; session
+# modules would never be closed. Do not add a session include unless you
+# implement fork/wait lifecycle support.
+auth       include      system-auth
+account    include      system-auth
