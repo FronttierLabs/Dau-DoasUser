@@ -25,7 +25,7 @@ Run everything as root (`sudo -i` first, or prefix each command with `sudo`).
 ```bash
 apt-get update
 apt-get install -y --no-install-recommends build-essential golang-go libpam0g-dev git
-git clone https://github.com/yuy806684-ai/Dau-DoasUser.git
+git clone https://github.com/FronttierLabs/Dau-DoasUser.git
 cd Dau-DoasUser
 export CGO_ENABLED=1
 export CGO_CFLAGS="-O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong"
@@ -40,7 +40,7 @@ chmod 0644 /etc/pam.d/dau
 
 ```bash
 pacman -Sy --noconfirm base-devel go git
-git clone https://github.com/yuy806684-ai/Dau-DoasUser.git
+git clone https://github.com/FronttierLabs/Dau-DoasUser.git
 cd Dau-DoasUser
 export CGO_ENABLED=1
 export CGO_CFLAGS="-O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong"
