@@ -4,8 +4,8 @@
 own or administer.
 
 ## Reporting
-Do NOT open public issues for vulnerabilities. Email the maintainer privately
-(or use a GitHub private security advisory) and allow time for a fix.
+Do NOT open public issues for vulnerabilities.
+use a GitHub private security advisory and allow time for a fix.
 
 ## Design guarantees
 - Fail-closed on any config/permission/PAM error.
