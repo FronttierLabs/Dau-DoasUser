@@ -18,7 +18,7 @@ Current release: `v1.2.0-kestrel`
 ## Install (as root)
 
 There is intentionally no installer script — the steps below ARE the installer.
-Run everything as root (`sudo -i` first, or prefix each command with `sudo`).
+Run everything as root or with sudo for each commands.
 
 ### Debian / Ubuntu (tested on Debian 13)
 
