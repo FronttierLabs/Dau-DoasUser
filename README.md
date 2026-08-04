@@ -20,7 +20,7 @@ Current release: `v1.2.0-kestrel`
 There is intentionally no installer script — the steps below ARE the installer.
 Run everything as root or with sudo for each commands.
 
-### Debian / Ubuntu (tested on Debian 13)
+### Debian / Ubuntu (tested on Debian 13 and works)
 
 ```bash
 apt-get update
@@ -36,7 +36,7 @@ printf '#%%PAM-1.0\nauth      include     common-auth\naccount   include     com
 chmod 0644 /etc/pam.d/dau
 ```
 
-### Arch 
+### Arch !!!NOT TESTED!!!
 
 ```bash
 pacman -Sy --noconfirm base-devel go git
