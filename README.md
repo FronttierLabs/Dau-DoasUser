@@ -81,7 +81,7 @@ permit carol as root cmd /usr/bin/less args any         # explicit opt-in
 - **No path fallback:** exec is strictly `execveat(AT_EMPTY_PATH)` on an
   `O_NOFOLLOW` fd; a path fallback would re-open the TOCTOU race.
 - **No interactive shell:** `dau` with no command fails closed (`no command specified`).
-- **Auth lifecycle:** authenticate + account + setcred. No PAM session
+- **Auth lifecycle:** authenticate + account only. No PAM cred or session management
   (dau execs directly and cannot close a session after the fact).
 - **Rate limiting:** the 2s failure delay is only a speed-bump; real lockout
   must come from `pam_faillock` (or equivalent) in your PAM stack.
