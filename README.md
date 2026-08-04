@@ -34,7 +34,9 @@ install -m 4755 -o root -g root ./dau /usr/local/bin/dau
 install -m 0600 -o root -g root examples/dau.conf /etc/dau.conf
 printf '#%%PAM-1.0\nauth      include     common-auth\naccount   include     common-account\n' > /etc/pam.d/dau
 chmod 0644 /etc/pam.d/dau
-//optional cd..
+
+!!OPTIONAL!! 
+cd..
 rm-rf Dau-DoasUser
 ```
 
@@ -51,7 +53,9 @@ install -m 4755 -o root -g root ./dau /usr/local/bin/dau
 install -m 0600 -o root -g root examples/dau.conf /etc/dau.conf
 printf '#%%PAM-1.0\nauth      include     system-auth\naccount   include     system-auth\n' > /etc/pam.d/dau
 chmod 0644 /etc/pam.d/dau
-//optional cd..
+
+!!OPTIONAL!! 
+cd..
 rm-rf Dau-DoasUser
 
 ```
