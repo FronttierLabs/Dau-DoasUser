@@ -40,7 +40,7 @@ cd..
 rm-rf Dau-DoasUser
 ```
 
-### Arch Linux (test on Cachy Os 99% sure works on base arch)
+### Arch Linux (tested on Cachy Os 99% sure works on base arch)
 
 ```bash
 pacman -Sy --noconfirm base-devel go git
