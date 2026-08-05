@@ -98,6 +98,14 @@ permit carol as root cmd /usr/bin/less args any         # explicit opt-in
 - **`-v` is for debugging only**; never enable it in production.
 - The policy file is read as root by design (it is 0600 root:root).
 
+## SOME USE OF AI Models where used in the creation of DAU/DoasUser
+```bash
+- **used Depseek v4 Flash/claude fable5/opus5/qwen3.8MAX for security auditing i used some of the AI advice to fix the security issues and not ask them for fixes
+- ** !!!YES I USED AI TO REGERATE THE README!!!
+
+
+```
+
 ## License
 
 MIT — see `LICENSE`.
